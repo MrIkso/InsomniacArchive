@@ -13,15 +13,28 @@ namespace InsomniacArchive.FileTypes
         private uint AssetId { get; set; }
 
         private bool Compressed { get; set; }
-
+        private bool IsGSTFile { get; set; }
+        private byte[] GSTFileHeader { get; set; }
         protected override void CompressData(MemoryStream input, Stream output)
         {
             ExtendedBinaryWriter bw = new(output);
 
-            bw.Write(AssetId);
-            bw.Write(input.Length);
+            if (IsGSTFile)
+            {
+                bw.Write(GSTFileHeader, 0, GSTFileHeader.Length);
+                bw.Seek(0x18, SeekOrigin.Begin);
+                bw.Write(input.Length);
+                bw.Seek(0x1C, SeekOrigin.Begin);
+                bw.Write(GSTFileHeader, 0x1C, 4);
 
-            bw.Pad(0x24 - (int)bw.BaseStream.Position);
+                bw.Pad(0x20 - (int)bw.BaseStream.Position);
+            }
+            else
+            {
+                bw.Write(AssetId);
+                bw.Write(input.Length);
+                bw.Pad(0x24 - (int)bw.BaseStream.Position);
+            }
 
             if (!Compressed)
             {
@@ -43,15 +56,22 @@ namespace InsomniacArchive.FileTypes
             int rawsize;
 
             BinaryReader br = new(input);
-            
+            int datStartOffset = 0x24;
             AssetId = br.ReadUInt32();
+            if (AssetId == 0x00475453) // GTS Header
+            {
+                IsGSTFile = true;
+                datStartOffset = 0x20;
+                br.BaseStream.Position = 0x0;
+                GSTFileHeader = br.ReadBytes(0x20);
+            }
 
-            compSize = (int)input.Length - 0x24;
+            compSize = (int)input.Length - datStartOffset;
             rawsize = br.ReadInt32();
 
             Compressed = false; // compSize != rawsize;
 
-            input.Position = 0x24;
+            input.Position = datStartOffset;
 
             if (!Compressed)
             {
@@ -59,9 +79,9 @@ namespace InsomniacArchive.FileTypes
                 return;
             }
 
-            byte[] compressedData = new byte[input.Length - 0x24];
+            byte[] compressedData = new byte[input.Length - datStartOffset];
             input.Read(compressedData);
-            
+
             byte[] decompressedData = new byte[rawsize];
             K4os.Compression.LZ4.LZ4Codec.Decode(compressedData, decompressedData);
 
